@@ -16,6 +16,7 @@ import {
   Line,
   LineChart,
   Rectangle,
+  ReferenceLine,
   ResponsiveContainer,
   Sankey,
   Tooltip,
@@ -66,7 +67,9 @@ type PathKey = keyof typeof PATHS;
 const HEAT_STEPS = ["#141a2b", "#184f95", "#2a78d6", "#6da7ec", "#b7d3f6"];
 
 // ---------------------------------------------------------------------------
-// Deterministic mock data (seeded RNG so SSR and client render identically)
+// Deterministic mock data (seeded RNGs so SSR and client render identically).
+// Each dataset gets its own RNG instance so adding or reordering a generator
+// never shifts the numbers another chart already renders.
 // ---------------------------------------------------------------------------
 
 function mulberry32(seed: number) {
@@ -79,7 +82,12 @@ function mulberry32(seed: number) {
   };
 }
 
-const rng = mulberry32(20260727);
+const SEED = 20260727;
+const heatmapRng = mulberry32(SEED + 1);
+const correlationRng = mulberry32(SEED + 2);
+const frictionRng = mulberry32(SEED + 3);
+const kriyaRng = mulberry32(SEED + 4);
+const mantraRng = mulberry32(SEED + 5);
 
 // --- Energy Flow Analyzer: weekly 112-waking-hour budget -------------------
 
@@ -169,8 +177,11 @@ function generateHeatmap(): HeatDay[] {
   const cursor = new Date(paddedStart);
   while (cursor <= today) {
     const isWeekend = cursor.getDay() === 0 || cursor.getDay() === 6;
-    const miss = rng() < (isWeekend ? 0.12 : 0.2);
-    const hours = miss ? 0 : Math.round((0.4 + rng() * (isWeekend ? 2.2 : 1.6)) * 10) / 10;
+    const daysFromToday = Math.round((today.getTime() - cursor.getTime()) / 86_400_000);
+    // Keep the current 9-day sprint (mirrors the Sprint Board's "Day 9 of 14")
+    // unbroken, so the streak stat never lands on an unlucky 0 on load.
+    const miss = daysFromToday >= 9 && heatmapRng() < (isWeekend ? 0.12 : 0.2);
+    const hours = miss ? 0 : Math.round((0.4 + heatmapRng() * (isWeekend ? 2.2 : 1.6)) * 10) / 10;
     days.push({ date: new Date(cursor), hours });
     cursor.setDate(cursor.getDate() + 1);
   }
@@ -207,8 +218,8 @@ interface CorrelationDay {
 function generateCorrelation(): CorrelationDay[] {
   const out: CorrelationDay[] = [];
   for (let day = 1; day <= 30; day++) {
-    const meditationHours = Math.round((0.25 + rng() * 1.1) * 10) / 10;
-    const noise = (rng() - 0.5) * 2.2;
+    const meditationHours = Math.round((0.25 + correlationRng() * 1.1) * 10) / 10;
+    const noise = (correlationRng() - 0.5) * 2.2;
     const clarity = Math.min(10, Math.max(1, Math.round(3.2 + meditationHours * 3.6 + noise)));
     out.push({ day, clarity, meditationHours });
   }
@@ -233,6 +244,207 @@ function pearsonR(rows: CorrelationDay[]): number {
 }
 
 const correlationR = pearsonR(correlationData);
+
+// --- Energy Leak & Friction Audit: gain vs. drain, last 7 days -------------
+
+interface FrictionDay {
+  day: string;
+  gainHours: number;
+  drainHours: number;
+  net: number;
+}
+
+const DRAIN_HABITS = ["Mindless scrolling", "Reactive email", "Over-caffeination", "Doomscrolling news", "Unplanned venting"];
+const GAIN_HABITS = ["Cold shower", "Gratitude note", "Walk without phone", "Box-breathing break", "Early lights-out"];
+
+function generateFrictionAudit(): FrictionDay[] {
+  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  return labels.map((day) => {
+    const gainHours = Math.round((0.3 + frictionRng() * 1.1) * 10) / 10;
+    const drainHours = Math.round((0.2 + frictionRng() * 1.3) * 10) / 10;
+    return { day, gainHours, drainHours, net: Math.round((gainHours - drainHours) * 10) / 10 };
+  });
+}
+
+const frictionData = generateFrictionAudit();
+
+function topTags(habits: string[], n = 3) {
+  return habits
+    .map((label) => ({ label, count: 1 + Math.floor(frictionRng() * 6) }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, n);
+}
+
+const topDrains = topTags(DRAIN_HABITS);
+const topGains = topTags(GAIN_HABITS);
+
+// --- Kriya & Breathwork Precision Log: quality over quantity, 14 days ------
+
+type PostPracticeState = "Grounded" | "Expansive" | "Neutral" | "Agitated";
+
+interface KriyaDay {
+  date: Date;
+  focus: number; // 1-5, internal focus / stillness
+  anchored: boolean; // third-eye / energy awareness held
+  state: PostPracticeState;
+}
+
+const STATE_COLOR: Record<PostPracticeState, string> = {
+  Grounded: PALETTE.good,
+  Expansive: PALETTE.clarity,
+  Neutral: PALETTE.textMuted,
+  Agitated: PALETTE.warning,
+};
+
+function generateKriyaLog(): KriyaDay[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days: KriyaDay[] = [];
+  for (let i = 13; i >= 0; i--) {
+    const date = new Date(today);
+    date.setDate(today.getDate() - i);
+    const focus = Math.min(5, Math.max(1, Math.round(2.6 + kriyaRng() * 2.4)));
+    const anchored = kriyaRng() > 0.3;
+    const state: PostPracticeState =
+      focus >= 4 ? (kriyaRng() > 0.4 ? "Grounded" : "Expansive") : focus <= 2 ? "Agitated" : "Neutral";
+    days.push({ date, focus, anchored, state });
+  }
+  return days;
+}
+
+const kriyaData = generateKriyaLog();
+
+// --- Mantra & Bhakti Resonance Tracker --------------------------------------
+
+interface MantraStat {
+  name: string;
+  count: number;
+  resonance: number; // 1-5
+}
+
+const MANTRA_NAMES = [
+  "Om Namah Shivaya",
+  "Gayatri Mantra",
+  "Maha Mrityunjaya",
+  "Hanuman Chalisa",
+  "Shiv Tandav Stotram",
+  "So'ham",
+];
+
+function generateMantraStats(): MantraStat[] {
+  return MANTRA_NAMES.map((name) => ({
+    name,
+    count: 2 + Math.floor(mantraRng() * 14),
+    resonance: Math.round((3 + mantraRng() * 2) * 10) / 10,
+  })).sort((a, b) => b.count - a.count);
+}
+
+const mantraStats = generateMantraStats();
+
+// --- Gita Study & Insight Index: wisdom journal -----------------------------
+
+interface JournalEntry {
+  date: Date;
+  verse: string;
+  lesson: string;
+  appliedIn: string;
+  appliedUnderPressure: boolean;
+}
+
+const JOURNAL_SEED: Omit<JournalEntry, "date">[] = [
+  {
+    verse: "Gita 2.47",
+    lesson: "You have a right to your actions, never to the fruits of those actions.",
+    appliedIn: "Let go of outcome anxiety before the board review.",
+    appliedUnderPressure: true,
+  },
+  {
+    verse: "Gita 2.48",
+    lesson: "Perform action established in balance, abandoning attachment to success and failure.",
+    appliedIn: "Stayed even-keeled through a production incident.",
+    appliedUnderPressure: true,
+  },
+  {
+    verse: "Gita 3.19",
+    lesson: "By working without attachment, one attains the ultimate.",
+    appliedIn: "Shipped the release without needing credit for it.",
+    appliedUnderPressure: false,
+  },
+  {
+    verse: "Gita 6.5",
+    lesson: "Elevate yourself through the self; do not degrade yourself.",
+    appliedIn: "Caught a self-critical spiral mid-standup and reframed it.",
+    appliedUnderPressure: true,
+  },
+  {
+    verse: "Gita 2.14",
+    lesson: "Contact between the senses and their objects gives rise to fleeting pleasure and pain — learn to tolerate them.",
+    appliedIn: "Sat with frustration during a client escalation instead of reacting.",
+    appliedUnderPressure: true,
+  },
+  {
+    verse: "Gita 4.18",
+    lesson: "One who sees inaction in action, and action in inaction, is wise among all.",
+    appliedIn: "Noticed how much of the day's 'busy' work was really avoidance.",
+    appliedUnderPressure: false,
+  },
+  {
+    verse: "Gita 12.13",
+    lesson: "Free from malice, friendly and compassionate toward all beings.",
+    appliedIn: "Gave a hard piece of feedback without any edge in it.",
+    appliedUnderPressure: true,
+  },
+];
+
+function generateJournal(): JournalEntry[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return JOURNAL_SEED.map((entry, i) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - i);
+    return { ...entry, date };
+  });
+}
+
+const journalEntries = generateJournal();
+
+// --- Glossary ----------------------------------------------------------------
+
+const GLOSSARY: { group: string; terms: { term: string; definition: string }[] }[] = [
+  {
+    group: "The four paths",
+    terms: [
+      { term: "Karma Yoga", definition: "The path of selfless action — doing the work fully, without attachment to outcome or credit." },
+      { term: "Raja Yoga", definition: "The path of meditation and mental discipline — stilling the mind through practices like Kriya and Pranayama." },
+      { term: "Jnana Yoga", definition: "The path of wisdom and self-inquiry — study and direct insight into the nature of the self." },
+      { term: "Bhakti Yoga", definition: "The path of devotion — mantra, japa, and ritual that orient the heart toward the sacred." },
+      { term: "Sadhana", definition: "Consistent spiritual practice — the daily discipline that ties all four paths together." },
+    ],
+  },
+  {
+    group: "Practice terms",
+    terms: [
+      { term: "Kriya", definition: "A structured meditation or breath technique practiced to purify and focus the mind." },
+      { term: "Pranayama", definition: "Breath-control practice used to regulate the nervous system and steady attention." },
+      { term: "Japa", definition: "Repetitive recitation of a mantra, often counted on a mala of 108 beads." },
+      { term: "Mantra", definition: "A sacred sound or phrase repeated to focus the mind and shift internal state." },
+      { term: "Aarti", definition: "A devotional ritual of offering light, typically performed at dawn or dusk." },
+      { term: "Bhagavad Gita", definition: "A core yogic text on duty, action, and self-realization, often studied verse by verse." },
+    ],
+  },
+  {
+    group: "Dashboard metrics",
+    terms: [
+      { term: "Energy flow budget", definition: "Your 112 waking hours per week, allocated across the four paths plus unallocated time." },
+      { term: "Friction / unallocated", definition: "Waking hours not consciously routed to any practice — the dashboard's highest-leverage lever." },
+      { term: "Sprint", definition: "A 14-day window of committed practice goals, tracked like an agile sprint." },
+      { term: "Consistency streak", definition: "Consecutive days with at least some logged practice." },
+      { term: "Pearson r", definition: "A correlation coefficient from -1 to 1 measuring how tightly two metrics move together; closer to 1 means a stronger positive relationship." },
+      { term: "Resonance score", definition: "A 1–5 self-rating of how deeply a mantra or practice landed emotionally." },
+      { term: "Net energy", definition: "Gain-habits minus drain-habits for a given day, in hours of vital energy preserved or lost." },
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Shared chrome
@@ -319,6 +531,20 @@ function TooltipShell({ children }: { children: ReactNode }) {
     >
       {children}
     </div>
+  );
+}
+
+function Chip({ label, count, tone }: { label: string; count?: number; tone: "gain" | "drain" }) {
+  const color = tone === "gain" ? PALETTE.karma : PALETTE.critical;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+      style={{ borderColor: PALETTE.border, color: PALETTE.textSecondary, background: `${color}1a` }}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+      {count !== undefined && <span style={{ color: PALETTE.textMuted }}>×{count}</span>}
+    </span>
   );
 }
 
@@ -710,10 +936,305 @@ function CorrelationEngine() {
 }
 
 // ---------------------------------------------------------------------------
+// 5. Energy Leak & Friction Audit
+// ---------------------------------------------------------------------------
+//
+// Net energy is a polarity metric (above/below zero), so it gets the
+// diverging color job — not a categorical accent — per the same rule that
+// keeps the Correlation Engine off a dual axis.
+
+function DivergingBar(props: any) {
+  const { x, y, width, height, payload } = props;
+  if (height <= 0) return null;
+  const isPositive: boolean = payload.net >= 0;
+  const color = isPositive ? PALETTE.karma : PALETTE.critical;
+  const r = Math.min(4, height, width / 2);
+  const path = isPositive
+    ? `M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`
+    : `M${x},${y} L${x + width},${y} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x + r},${y + height} Q${x},${y + height} ${x},${y + height - r} Z`;
+  return <path d={path} fill={color} />;
+}
+
+function frictionTooltip(props: any) {
+  if (!props.active || !props.payload?.length) return null;
+  const d: FrictionDay = props.payload[0].payload;
+  return (
+    <TooltipShell>
+      <p style={{ color: PALETTE.textSecondary }}>{d.day}</p>
+      <p className="mt-1 font-semibold" style={{ color: d.net >= 0 ? PALETTE.karma : PALETTE.critical }}>
+        {d.net >= 0 ? "+" : ""}
+        {d.net}h net
+      </p>
+      <p className="mt-0.5 text-[11px]" style={{ color: PALETTE.textMuted }}>
+        +{d.gainHours}h gained · −{d.drainHours}h drained
+      </p>
+    </TooltipShell>
+  );
+}
+
+function EnergyFrictionAudit() {
+  const weeklyNet = Math.round(frictionData.reduce((s, d) => s + d.net, 0) * 10) / 10;
+  return (
+    <SectionCard
+      title="Energy Leak & Friction Audit"
+      subtitle="Evening check-in: unconscious habits that drain vital energy, against habits that preserve it."
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <LegendDot color={PALETTE.karma} label="Gain (net positive)" />
+        <LegendDot color={PALETTE.critical} label="Drain (net negative)" />
+        <span
+          className="ml-auto text-xs font-medium"
+          style={{ color: weeklyNet >= 0 ? PALETTE.karma : PALETTE.critical }}
+        >
+          {weeklyNet >= 0 ? "+" : ""}
+          {weeklyNet}h net this week
+        </span>
+      </div>
+      <div style={{ height: 160 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={frictionData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke={PALETTE.gridline} vertical={false} />
+            <XAxis dataKey="day" tick={{ fill: PALETTE.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fill: PALETTE.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} width={28} />
+            <ReferenceLine y={0} stroke={PALETTE.baseline} />
+            <Tooltip content={frictionTooltip} cursor={false} />
+            <Bar dataKey="net" shape={DivergingBar} maxBarSize={22} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide" style={{ color: PALETTE.textMuted }}>
+            Top drains
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {topDrains.map((t) => (
+              <Chip key={t.label} label={t.label} count={t.count} tone="drain" />
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide" style={{ color: PALETTE.textMuted }}>
+            Top gains
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {topGains.map((t) => (
+              <Chip key={t.label} label={t.label} count={t.count} tone="gain" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. Kriya & Breathwork Precision Log
+// ---------------------------------------------------------------------------
+
+function kriyaTooltip(props: any) {
+  if (!props.active || !props.payload?.length) return null;
+  const d: KriyaDay = props.payload[0].payload;
+  return (
+    <TooltipShell>
+      <p style={{ color: PALETTE.textSecondary }}>
+        {d.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+      </p>
+      <p className="mt-1 font-semibold" style={{ color: PALETTE.textPrimary }}>
+        Focus {d.focus}/5
+      </p>
+      <p className="mt-0.5 text-[11px]" style={{ color: STATE_COLOR[d.state] }}>
+        {d.state}
+        {d.anchored ? " · anchored inward" : ""}
+      </p>
+    </TooltipShell>
+  );
+}
+
+function KriyaPrecisionLog() {
+  const anchoredCount = kriyaData.filter((d) => d.anchored).length;
+  const avgFocus = Math.round((kriyaData.reduce((s, d) => s + d.focus, 0) / kriyaData.length) * 10) / 10;
+  const recent = kriyaData.slice(-7);
+  return (
+    <SectionCard
+      title="Kriya & Breathwork Precision Log"
+      subtitle="Depth of practice, not just duration — internal focus, third-eye anchoring, and post-practice state."
+    >
+      <div className="mb-3 flex gap-6">
+        <div>
+          <p className="text-[11px]" style={{ color: PALETTE.textMuted }}>Avg focus (14d)</p>
+          <p className="text-lg font-semibold" style={{ color: PALETTE.textPrimary }}>{avgFocus}/5</p>
+        </div>
+        <div>
+          <p className="text-[11px]" style={{ color: PALETTE.textMuted }}>Anchored inward</p>
+          <p className="text-lg font-semibold" style={{ color: PALETTE.textPrimary }}>{anchoredCount}/14 days</p>
+        </div>
+      </div>
+      <div style={{ height: 140 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={kriyaData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke={PALETTE.gridline} vertical={false} />
+            <XAxis
+              dataKey={(d: KriyaDay) => d.date.getDate()}
+              tick={{ fill: PALETTE.textMuted, fontSize: 11 }}
+              axisLine={{ stroke: PALETTE.baseline }}
+              tickLine={false}
+              interval={1}
+            />
+            <YAxis domain={[1, 5]} ticks={[1, 3, 5]} width={20} tick={{ fill: PALETTE.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+            <Tooltip content={kriyaTooltip} />
+            <Line
+              type="monotone"
+              dataKey="focus"
+              stroke={PALETTE.raja}
+              strokeWidth={2}
+              dot={{ r: 3, fill: PALETTE.raja, stroke: PALETTE.surface, strokeWidth: 2 }}
+              activeDot={{ r: 5, fill: PALETTE.raja, stroke: PALETTE.surface, strokeWidth: 2 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="mb-1.5 mt-3 text-[11px] font-medium uppercase tracking-wide" style={{ color: PALETTE.textMuted }}>
+        Post-practice state, last 7 days
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {recent.map((d, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px]"
+            style={{ borderColor: PALETTE.border, color: PALETTE.textSecondary }}
+          >
+            {d.date.toLocaleDateString("en-US", { weekday: "short" })}
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: STATE_COLOR[d.state] }} />
+            {d.state}
+          </span>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Mantra & Bhakti Resonance Tracker
+// ---------------------------------------------------------------------------
+
+function MantraResonanceTracker() {
+  const maxCount = Math.max(...mantraStats.map((m) => m.count));
+  return (
+    <SectionCard
+      title="Mantra & Bhakti Resonance Tracker"
+      subtitle="Which japa, stotras, and bhajans carried the week — frequency and felt resonance, not just time spent."
+    >
+      <div className="space-y-3">
+        {mantraStats.map((m) => (
+          <div key={m.name}>
+            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 text-xs">
+              <span style={{ color: PALETTE.textPrimary }}>{m.name}</span>
+              <span style={{ color: PALETTE.textMuted }}>
+                {m.count}× this week · resonance {m.resonance}/5
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full" style={{ background: PALETTE.border }}>
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${(m.count / maxCount) * 100}%`, backgroundColor: PALETTE.bhakti }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Gita Study & Insight Index (Wisdom Journal)
+// ---------------------------------------------------------------------------
+
+function WisdomJournal() {
+  const appliedCount = journalEntries.filter((e) => e.appliedUnderPressure).length;
+  return (
+    <SectionCard
+      title="Gita Study & Insight Index"
+      subtitle={`Wisdom journal — ${appliedCount}/${journalEntries.length} lessons applied under real pressure this week.`}
+    >
+      <div className="space-y-2.5">
+        {journalEntries.map((e, i) => (
+          <div key={i} className="rounded-xl border p-3" style={{ background: PALETTE.surfaceRaised, borderColor: PALETTE.border }}>
+            <div className="flex items-center justify-between gap-2">
+              <span
+                className="rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+                style={{ color: PALETTE.jnana, background: `${PALETTE.jnana}1a` }}
+              >
+                {e.verse}
+              </span>
+              <span className="text-[10px]" style={{ color: PALETTE.textMuted }}>
+                {e.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+              </span>
+            </div>
+            <p className="mt-1.5 text-xs leading-snug" style={{ color: PALETTE.textPrimary }}>{e.lesson}</p>
+            <p className="mt-1.5 text-[11px] leading-snug" style={{ color: PALETTE.textSecondary }}>
+              Applied: {e.appliedIn}
+            </p>
+            {e.appliedUnderPressure && (
+              <span className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium" style={{ color: PALETTE.good }}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: PALETTE.good }} />
+                Applied under pressure
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Glossary panel
+// ---------------------------------------------------------------------------
+
+function GlossaryPanel() {
+  return (
+    <SectionCard title="Glossary" subtitle="Terms used across this dashboard.">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        {GLOSSARY.map((section) => (
+          <div key={section.group}>
+            <p className="mb-2 text-[11px] font-medium uppercase tracking-wide" style={{ color: PALETTE.textMuted }}>
+              {section.group}
+            </p>
+            <dl className="space-y-2.5">
+              {section.terms.map((t) => (
+                <div key={t.term}>
+                  <dt className="text-xs font-semibold" style={{ color: PALETTE.textPrimary }}>{t.term}</dt>
+                  <dd className="mt-0.5 text-[11px] leading-relaxed" style={{ color: PALETTE.textSecondary }}>
+                    {t.definition}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard shell
 // ---------------------------------------------------------------------------
 
+const TABS = [
+  { key: "flow", label: "Daily Flow & Energy Allocation" },
+  { key: "quality", label: "Sadhana Quality & Kriya Metrics" },
+  { key: "wisdom", label: "Gita Study & Karma Integration" },
+] as const;
+
+type TabKey = (typeof TABS)[number]["key"];
+
 export default function SadhanaDashboard() {
+  const [tab, setTab] = useState<TabKey>("flow");
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
+
   const totalPracticeHours = FLOW_HOURS.karma + FLOW_HOURS.raja + FLOW_HOURS.jnana + FLOW_HOURS.bhakti;
   const streak = currentStreak(heatmapData);
   const dominant = (Object.keys(PATHS) as PathKey[]).reduce((best, key) =>
@@ -722,44 +1243,100 @@ export default function SadhanaDashboard() {
   return (
     <div className="min-h-screen w-full" style={{ background: PALETTE.pagePlane }}>
       <div className="mx-auto max-w-[1400px] space-y-6 p-4 sm:p-6 lg:p-8">
-        <header>
-          <p className="text-xs font-medium uppercase tracking-widest" style={{ color: PALETTE.textMuted }}>
-            Sadhana Systems · Pro Mode
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold sm:text-3xl" style={{ color: PALETTE.textPrimary }}>
-            Weekly Practice Dashboard
-          </h1>
-          <p className="mt-1 text-sm" style={{ color: PALETTE.textSecondary }}>
-            Systems-thinking applied to your four paths — Karma, Raja, Jnana, Bhakti.
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-widest" style={{ color: PALETTE.textMuted }}>
+              Sadhana Systems · Pro Mode
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold sm:text-3xl" style={{ color: PALETTE.textPrimary }}>
+              Weekly Practice Dashboard
+            </h1>
+            <p className="mt-1 text-sm" style={{ color: PALETTE.textSecondary }}>
+              Systems-thinking applied to your four paths — Karma, Raja, Jnana, Bhakti.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setGlossaryOpen((v) => !v)}
+            className="rounded-full border px-3 py-1.5 text-xs font-medium"
+            style={{
+              borderColor: PALETTE.border,
+              color: glossaryOpen ? PALETTE.textPrimary : PALETTE.textSecondary,
+              background: glossaryOpen ? PALETTE.surfaceRaised : "transparent",
+            }}
+          >
+            {glossaryOpen ? "Hide glossary" : "Glossary"}
+          </button>
         </header>
 
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatTile label="Sadhana hours this week" value={`${totalPracticeHours}h`} delta="+4.2h vs last wk" />
-          <StatTile label="Current streak" value={`${streak} days`} delta="Personal best" />
-          <StatTile
-            label="Dominant path"
-            value={PATHS[dominant].label.split(" · ")[0]}
-            delta={`${Math.round((FLOW_HOURS[dominant] / totalPracticeHours) * 100)}% of practice`}
-            accent={PATHS[dominant].color}
-          />
-          <StatTile
-            label="Clarity ↔ meditation"
-            value={`r = ${correlationR.toFixed(2)}`}
-            delta={Math.abs(correlationR) >= 0.7 ? "Strong signal" : "Building signal"}
-            accent={PALETTE.clarity}
-          />
-        </div>
+        {glossaryOpen && <GlossaryPanel />}
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="xl:col-span-2">
-            <EnergyFlowAnalyzer />
+        <nav className="flex flex-wrap gap-1 border-b" style={{ borderColor: PALETTE.border }}>
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className="border-b-2 px-3 py-2 text-xs font-medium"
+              style={{
+                borderColor: tab === t.key ? PALETTE.textPrimary : "transparent",
+                color: tab === t.key ? PALETTE.textPrimary : PALETTE.textMuted,
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        {tab === "flow" && (
+          <>
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <StatTile label="Sadhana hours this week" value={`${totalPracticeHours}h`} delta="+4.2h vs last wk" />
+              <StatTile
+                label="Current streak"
+                value={`${streak} days`}
+                delta={streak >= 7 ? "Personal best" : streak > 0 ? "Building momentum" : "Restart today"}
+                accent={streak > 0 ? undefined : PALETTE.warning}
+              />
+              <StatTile
+                label="Dominant path"
+                value={PATHS[dominant].label.split(" · ")[0]}
+                delta={`${Math.round((FLOW_HOURS[dominant] / totalPracticeHours) * 100)}% of practice`}
+                accent={PATHS[dominant].color}
+              />
+              <StatTile
+                label="Clarity ↔ meditation"
+                value={`r = ${correlationR.toFixed(2)}`}
+                delta={Math.abs(correlationR) >= 0.7 ? "Strong signal" : "Building signal"}
+                accent={PALETTE.clarity}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+              <div className="xl:col-span-2">
+                <EnergyFlowAnalyzer />
+              </div>
+              <SprintBoard />
+            </div>
+
+            <ConsistencyHeatmap />
+            <CorrelationEngine />
+          </>
+        )}
+
+        {tab === "quality" && (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <EnergyFrictionAudit />
+            <KriyaPrecisionLog />
           </div>
-          <SprintBoard />
-        </div>
+        )}
 
-        <ConsistencyHeatmap />
-        <CorrelationEngine />
+        {tab === "wisdom" && (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <MantraResonanceTracker />
+            <WisdomJournal />
+          </div>
+        )}
       </div>
     </div>
   );
