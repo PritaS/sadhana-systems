@@ -944,11 +944,11 @@ function CorrelationEngine() {
 // keeps the Correlation Engine off a dual axis.
 
 function DivergingBar(props: any) {
-  const { x, y, width, height, payload } = props;
-  if (height <= 0) return null;
+  const { x, y, width, height: rawHeight, payload } = props;
+  const height = Math.max(0, rawHeight);
   const isPositive: boolean = payload.net >= 0;
   const color = isPositive ? PALETTE.karma : PALETTE.critical;
-  const r = Math.min(4, height, width / 2);
+  const r = Math.max(0, Math.min(4, height, width / 2));
   const path = isPositive
     ? `M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`
     : `M${x},${y} L${x + width},${y} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x + r},${y + height} Q${x},${y + height} ${x},${y + height - r} Z`;
