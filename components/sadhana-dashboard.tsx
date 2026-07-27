@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -139,7 +140,7 @@ interface SprintGoal {
   progress: number; // 0-100
 }
 
-const sprintGoals: SprintGoal[] = [
+const DEFAULT_SPRINT_GOALS: SprintGoal[] = [
   { id: "g1", title: "Maintain 45m Morning Kriya", path: "raja", dayCurrent: 9, dayTarget: 14, progress: 71 },
   { id: "g2", title: "Read Gita Ch. 2–4, annotate weak verses", path: "jnana", dayCurrent: 9, dayTarget: 14, progress: 50 },
   { id: "g3", title: "Zero-complaint standups (Karma-yoga at work)", path: "karma", dayCurrent: 9, dayTarget: 14, progress: 86 },
@@ -147,6 +148,18 @@ const sprintGoals: SprintGoal[] = [
   { id: "g5", title: "Digital sunset by 9:30pm", path: "karma", dayCurrent: 9, dayTarget: 14, progress: 14 },
   { id: "g6", title: "Japa mala, 108 count, pre-dawn", path: "bhakti", dayCurrent: 9, dayTarget: 14, progress: 64 },
 ];
+
+const SPRINT_STORAGE_KEY = "sadhana-sprint-progress-v1";
+
+function loadSavedSprintProgress(): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SPRINT_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
 
 function sprintStatus(goal: SprintGoal): { label: string; color: string } {
   const expected = (goal.dayCurrent / goal.dayTarget) * 100;
@@ -667,18 +680,46 @@ function columnFor(goal: SprintGoal): "behind" | "onpace" | "ahead" {
 }
 
 function SprintBoard() {
+  const [goals, setGoals] = useState<SprintGoal[]>(DEFAULT_SPRINT_GOALS);
+
+  // Defaults render first so server and client markup match; the saved
+  // override (if any) is applied after mount, client-only.
+  useEffect(() => {
+    const saved = loadSavedSprintProgress();
+    if (Object.keys(saved).length === 0) return;
+    setGoals((prev) => prev.map((g) => (g.id in saved ? { ...g, progress: saved[g.id] } : g)));
+  }, []);
+
+  function adjustProgress(id: string, delta: number) {
+    setGoals((prev) => {
+      const next = prev.map((g) =>
+        g.id === id ? { ...g, progress: Math.min(100, Math.max(0, g.progress + delta)) } : g
+      );
+      try {
+        const toSave: Record<string, number> = {};
+        next.forEach((g) => {
+          toSave[g.id] = g.progress;
+        });
+        window.localStorage.setItem(SPRINT_STORAGE_KEY, JSON.stringify(toSave));
+      } catch {
+        // localStorage unavailable (private browsing, disabled) — edits still work for this session
+      }
+      return next;
+    });
+  }
+
   return (
-    <SectionCard title="Spiritual Sprint Board" subtitle={`Day ${sprintGoals[0].dayCurrent} of ${sprintGoals[0].dayTarget} · Agile Sadhana`}>
+    <SectionCard title="Spiritual Sprint Board" subtitle={`Day ${goals[0].dayCurrent} of ${goals[0].dayTarget} · Agile Sadhana — click −/+ to log progress`}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {SPRINT_COLUMNS.map((col) => {
-          const goals = sprintGoals.filter((g) => columnFor(g) === col.key);
+          const columnGoals = goals.filter((g) => columnFor(g) === col.key);
           return (
             <div key={col.key} className="space-y-3">
               <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: PALETTE.textMuted }}>
-                {col.label} · {goals.length}
+                {col.label} · {columnGoals.length}
               </p>
               <div className="space-y-2.5">
-                {goals.map((goal) => {
+                {columnGoals.map((goal) => {
                   const status = sprintStatus(goal);
                   const pathInfo = PATHS[goal.path];
                   return (
@@ -698,12 +739,34 @@ function SprintBoard() {
                       </p>
                       <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: PALETTE.border }}>
                         <div
-                          className="h-full rounded-full"
+                          className="h-full rounded-full transition-[width]"
                           style={{ width: `${goal.progress}%`, backgroundColor: pathInfo.color }}
                         />
                       </div>
-                      <div className="mt-1.5 flex items-center justify-between text-[10px]" style={{ color: PALETTE.textMuted }}>
-                        <span>{goal.progress}%</span>
+                      <div className="mt-2 flex items-center justify-between text-[10px]" style={{ color: PALETTE.textMuted }}>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            aria-label={`Decrease progress for ${goal.title}`}
+                            onClick={() => adjustProgress(goal.id, -5)}
+                            className="flex h-5 w-5 items-center justify-center rounded-full border text-xs leading-none"
+                            style={{ borderColor: PALETTE.border, color: PALETTE.textSecondary }}
+                          >
+                            −
+                          </button>
+                          <span className="w-9 text-center text-xs font-medium" style={{ color: PALETTE.textPrimary }}>
+                            {goal.progress}%
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Increase progress for ${goal.title}`}
+                            onClick={() => adjustProgress(goal.id, 5)}
+                            className="flex h-5 w-5 items-center justify-center rounded-full border text-xs leading-none"
+                            style={{ borderColor: PALETTE.border, color: PALETTE.textSecondary }}
+                          >
+                            +
+                          </button>
+                        </div>
                         <span>Day {goal.dayCurrent}/{goal.dayTarget}</span>
                       </div>
                     </div>
